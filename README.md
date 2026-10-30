@@ -2,33 +2,35 @@
 
 An installable R package for iterative Stock Synthesis 3 (SS3) multinomial composition reweighting using standard deviations of one-step-ahead (OSA) residuals, with final per-fleet/stratum **four-panel composite PDF diagnostics** based on `afscOSA`.
 
-> \*\*Research software, not validated for production assessments.\*\* The inverse-SDNR-squared update is a heuristic, not a formally validated likelihood-weight estimator. Inspect the residuals, fitted outputs, sample sizes, and model behavior before interpreting the results.
+> **Research software, not validated for production assessments.** The inverse-SDNR-squared update is a heuristic, not a formally validated likelihood-weight estimator. Inspect the residuals, fitted outputs, sample sizes, and model behavior before interpreting the results.
 
-## Install
+## Installation
+
+Install `osaSS3` from [afsc-assessments/osaSS3](https://github.com/afsc-assessments/osaSS3):
 
 ```r
 install.packages("remotes")
-remotes::install\_github("afsc-assessments/osaSS3")
+remotes::install_github("afsc-assessments/osaSS3")
 ```
 
 Install `r4ss`, `afscOSA`, and their dependencies according to their documentation. The SS3 executable is **not** included.
 
-## Use
+## Usage
 
 ```r
 library(osaSS3)
-fit <- osa\_reweight\_ss3(
-  model\_dir = "C:/SS3/MyModel",
-  plot\_final = TRUE,
-  max\_iter = 8
+fit <- osa_reweight_ss3(
+  model_dir = "C:/SS3/MyModel",
+  plot_final = TRUE,
+  max_iter = 8
 )
 fit$history
-fit$final\_plot\_files
+fit$final_plot_files
 ```
 
-The model folder must contain `starter.ss`, the indicated data and control files, forecast input if needed, and a runnable SS3 executable (`ss3.exe` in the folder or a path provided as `ss\_exe`).
+The model folder must contain `starter.ss`, the indicated data and control files, forecast input if needed, and a runnable SS3 executable (`ss3.exe` in the folder or a path provided as `ss_exe`).
 
-`OSA\_reweight\_runs/iter\_XX/final\_osa\_plots/` contains the final diagnostic PDFs. Each stratum gets a four-panel page: aggregated proportions, OSA Q-Q, OSA residual bubbles, and Pearson residual bubbles.
+`OSA_reweight_runs/iter_XX/final_osa_plots/` contains the final diagnostic PDFs. Each stratum gets a four-panel page: aggregated proportions, OSA Q-Q, OSA residual bubbles, and Pearson residual bubbles.
 
 ## Scope and limitations
 
