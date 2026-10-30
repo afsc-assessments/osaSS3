@@ -8,7 +8,7 @@ An installable R package for iterative Stock Synthesis 3 (SS3) multinomial compo
 
 ```r
 install.packages("remotes")
-remotes::install\_github("afsc-assessments/osaSS3")
+# remotes::install\_github("afsc-assessments/osaSS3")
 ```
 
 Install `r4ss`, `afscOSA`, and their dependencies according to their documentation. The SS3 executable is **not** included.
