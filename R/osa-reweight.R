@@ -1,7 +1,444 @@
-# Experimental generic SS3 multinomial length/age composition OSA reweighting.
-# Requires: r4ss, afscOSA, SS3 executable, complete runnable model directory.
-# Does NOT tune conditional age-at-length, generalized size compositions, or DM parameters.
-# OSA-SDNR weighting is a research heuristic, NOT a validated estimator.
+
+#' Iterative OSA Residual Reweighting for Stock Synthesis Models
+#'
+#' @description
+#' Performs iterative reweighting of multinomial length- and age-composition
+#' data in Stock Synthesis 3 (SS3) models using the standard deviation of
+#' one-step-ahead (OSA) residuals.
+#'
+#' The function automatically identifies eligible composition-data
+#' weighting factors from the SS3 control file, executes successive
+#' model fits, calculates OSA residuals using the afscOSA package,
+#' and adjusts effective sample-size multipliers toward an OSA
+#' residual standard deviation (SDNR) of approximately 1.
+#'
+#' The procedure provides an experimental alternative to conventional
+#' composition-data weighting methods, including Francis and
+#' McAllister-Ianelli weighting.
+#'
+#' @details
+#' \strong{Overview}
+#'
+#' The function automates the following steps:
+#'
+#' \enumerate{
+#'   \item Reads starter.ss to identify the SS3 data and control files.
+#'   \item Identifies positive input variance-adjustment factors for
+#'         length (factor 4) and age (factor 5) compositions.
+#'   \item Creates a separate working directory for each iteration.
+#'   \item Runs Stock Synthesis using the current weighting factors.
+#'   \item Extracts observed and predicted composition proportions
+#'         and adjusted sample sizes from the SS3 report using r4ss.
+#'   \item Separates compositions into compatible strata.
+#'   \item Calculates OSA residuals for each stratum using afscOSA.
+#'   \item Pools residuals within each fleet and composition type.
+#'   \item Calculates the pooled OSA SDNR.
+#'   \item Updates composition-data weighting factors.
+#'   \item Repeats until convergence or the maximum number of
+#'         iterations is reached.
+#'   \item Optionally produces final OSA diagnostic plots.
+#' }
+#'
+#' \strong{Statistical basis}
+#'
+#' Under an appropriately specified composition likelihood,
+#' randomized OSA residuals should approximately follow a
+#' standard normal distribution.
+#'
+#' Consequently, the expected residual standard deviation is
+#' approximately 1.
+#'
+#' SDNR > 1 indicates greater residual dispersion than expected
+#' under the assumed likelihood, while SDNR < 1 indicates
+#' less residual dispersion than expected.
+#'
+#' These deviations may reflect inappropriate data weighting,
+#' model misspecification, or other sources of lack of fit.
+#'
+#' \strong{Iterative weighting algorithm}
+#'
+#' The proposed effective sample-size multiplier update is:
+#'
+#' \deqn{
+#'   w_{k+1} = w_k (1 / SDNR_k^2)^d
+#' }
+#'
+#' where:
+#'
+#' \itemize{
+#'   \item w_k is the composition weighting factor at iteration k.
+#'   \item SDNR_k is the pooled OSA residual standard deviation.
+#'   \item d is the damping parameter.
+#' }
+#'
+#' The update is restricted by step_limit and weight_bounds.
+#'
+#' The initial adjustment is calculated on the log scale:
+#'
+#' \deqn{
+#'   \Delta = -2d \log(SDNR_k)
+#' }
+#'
+#' The adjustment is then constrained to:
+#'
+#' \deqn{
+#'   -\log(s) \leq \Delta \leq \log(s)
+#' }
+#'
+#' where s is step_limit.
+#'
+#' The resulting weight is:
+#'
+#' \deqn{
+#'   w_{k+1} = \min(w_{max},
+#'     \max(w_{min}, w_k \exp(\Delta)))
+#' }
+#'
+#' This update is a proposed heuristic based on the approximate
+#' inverse relationship between multinomial sampling variance
+#' and effective sample size.
+#'
+#' It has not been established as an unbiased or generally
+#' convergent estimator of composition-data weighting.
+#'
+#' \strong{Composition stratification}
+#'
+#' Composition observations are separated into compatible strata
+#' before calculating OSA residuals.
+#'
+#' Depending on the fields available in the SS3 report,
+#' stratification may include:
+#'
+#' \itemize{
+#'   \item Sex or sex grouping.
+#'   \item Season and subseason.
+#'   \item Ageing-error group.
+#'   \item Population partition.
+#'   \item Area or sampling method.
+#'   \item Reported length-bin boundaries.
+#' }
+#'
+#' Each stratum must have a rectangular year-by-bin structure
+#' with consistent bin definitions and sufficient observations.
+#'
+#' The function calculates OSA residuals independently for each
+#' retained stratum and pools the finite residuals within a
+#' fleet and composition type.
+#'
+#' The pooled SDNR is calculated as the sample standard
+#' deviation of all retained residuals. Strata contributing
+#' more residuals consequently receive greater weight.
+#'
+#' A single weighting factor is updated for each eligible
+#' fleet and composition type.
+#'
+#' \strong{Convergence}
+#'
+#' The function considers a fitted iteration converged when:
+#'
+#' \deqn{
+#'   |SDNR_j - 1| \leq tolerance
+#' }
+#'
+#' for every eligible composition weighting factor j.
+#'
+#' Convergence is based on the SDNR values of the current
+#' fitted model, not on the change in weighting factors.
+#'
+#' The function does not require the weighting factors themselves
+#' to stabilize between successive iterations.
+#'
+#' Reaching the maximum number of iterations does not imply
+#' convergence.
+#'
+#' \strong{Final fitted weights}
+#'
+#' Each iteration records both the weighting factors used
+#' in the fitted model and the proposed weighting factors
+#' for the next iteration.
+#'
+#' If the maximum number of iterations is reached, the final
+#' proposed weights are not automatically fitted in an
+#' additional Stock Synthesis run.
+#'
+#' The last fitted weights are therefore those recorded
+#' as old_weight in the final iteration.
+#'
+#' \strong{OSA diagnostic plots}
+#'
+#' When plot_final = TRUE, the function generates diagnostic
+#' plots from the saved OSA results of the final fitted model.
+#'
+#' A separate composite PDF is produced for each successfully
+#' processed fleet/stratum combination.
+#'
+#' Each composite contains four vertically stacked panels:
+#'
+#' \enumerate{
+#'   \item Aggregated observed and predicted composition proportions.
+#'   \item OSA residual quantile-quantile (Q-Q) plot.
+#'   \item OSA residual bubble plot by year and composition bin.
+#'   \item Pearson residual bubble plot.
+#' }
+#'
+#' The plots are constructed using afscOSA::plot_osa().
+#'
+#' The plotting procedure uses previously saved OSA objects,
+#' without rerunning Stock Synthesis or changing model weights.
+#'
+#' Separate plots are produced for strata such as different
+#' ageing-error groups.
+#'
+#' \strong{Supported model configurations}
+#'
+#' The current implementation is intended for SS3 models with:
+#'
+#' \itemize{
+#'   \item Multinomial length compositions.
+#'   \item Multinomial marginal age compositions.
+#'   \item Multiple fleets.
+#'   \item Multiple sexes and seasons.
+#'   \item Multiple ageing-error groups.
+#'   \item Positive variance-adjustment factors 4 and 5.
+#' }
+#'
+#' \strong{Unsupported configurations}
+#'
+#' The function does not currently support:
+#'
+#' \itemize{
+#'   \item Conditional age-at-length compositions.
+#'   \item Dirichlet-multinomial concentration parameter tuning.
+#'   \item Generalized size-composition likelihoods.
+#'   \item Non-multinomial composition likelihoods.
+#'   \item Automatic estimation of age- or length-specific weights.
+#'   \item Arbitrary or nonstandard SS3 reporting structures.
+#' }
+#'
+#' Some unsupported configurations may be encountered during
+#' extraction rather than initial model discovery.
+#'
+#' \strong{Output files}
+#'
+#' Results are written to output_dir, which defaults to
+#' "OSA_reweight_runs" inside the model directory.
+#'
+#' Important outputs include:
+#'
+#' \itemize{
+#'   \item detected_targets.csv:
+#'         Identified composition weighting factors.
+#'   \item osa_weight_history.csv:
+#'         Weights, SDNRs, and proposed adjustments by iteration.
+#'   \item iter_XX/:
+#'         A separate fitted SS3 model directory.
+#'   \item iter_XX/osa_weight_summary.csv:
+#'         Weighting diagnostics for that iteration.
+#'   \item iter_XX/*_strata.csv:
+#'         Stratum-specific residual diagnostics.
+#'   \item iter_XX/*_stratum_XX.rds:
+#'         Saved afscOSA residual objects.
+#'   \item iter_XX/final_osa_plots/:
+#'         Composite diagnostic PDFs when requested.
+#' }
+#'
+#' \strong{Important limitations}
+#'
+#' Achieving SDNR near 1 does not demonstrate that the
+#' underlying assessment model is correctly specified.
+#'
+#' Systematic residual patterns may arise from incorrect
+#' growth, selectivity, ageing error, recruitment dynamics,
+#' spatial structure, or other model assumptions.
+#'
+#' Reweighting composition data may reduce the apparent
+#' influence of structural model misspecification without
+#' correcting its underlying cause.
+#'
+#' OSA residuals should therefore be evaluated using
+#' Q-Q plots, bubble plots, temporal patterns, and other
+#' diagnostic measures in addition to SDNR.
+#'
+#' Results may also depend on composition binning,
+#' sample-size definitions, randomization, and the
+#' particular SS3 and afscOSA versions used.
+#'
+#' This procedure is experimental and has not been
+#' validated as a replacement for established assessment
+#' composition-weighting methods.
+#'
+#' @param model_dir
+#' Character. Path to the directory containing the
+#' Stock Synthesis model files, including starter.ss
+#' and the data and control files referenced by it.
+#'
+#' @param ss_exe
+#' Character or NULL. Path to the Stock Synthesis executable.
+#' If NULL, the function searches the model directory and
+#' system path for standard SS3 executable names.
+#' Default is NULL.
+#'
+#' @param max_iter
+#' Integer. Maximum number of fitted SS3 iterations.
+#' Default is 8.
+#'
+#' @param tolerance
+#' Numeric. Maximum permitted absolute deviation of
+#' each pooled OSA SDNR from 1 for convergence.
+#' Default is 0.05.
+#'
+#' @param damping
+#' Numeric. Exponent applied to the variance-based
+#' weight adjustment. Must be greater than 0 and
+#' no greater than 1.
+#' Default is 0.5.
+#'
+#' @param step_limit
+#' Numeric. Maximum multiplicative change permitted
+#' for a weight in a single iteration.
+#' For example, 1.6 restricts the update factor to
+#' the interval [1/1.6, 1.6].
+#' Default is 1.6.
+#'
+#' @param weight_bounds
+#' Numeric vector of length 2. Minimum and maximum
+#' permitted composition weighting factors.
+#' Default is c(0.02, 3).
+#'
+#' @param seed
+#' Integer. Base random seed used for reproducible
+#' OSA residual calculations. Distinct seeds are
+#' derived for each target and stratum.
+#' Default is 10.
+#'
+#' @param output_dir
+#' Character or NULL. Directory in which iteration
+#' results and diagnostic files will be stored.
+#' If NULL, results are placed in an
+#' OSA_reweight_runs subdirectory of model_dir.
+#' An existing output directory causes an error
+#' rather than being overwritten.
+#'
+#' @param min_years
+#' Integer. Minimum number of distinct years required
+#' for a composition stratum to be included in the
+#' OSA analysis.
+#' Default is 3.
+#'
+#' @param dry_run
+#' Logical. If TRUE, creates the output structure
+#' and prepares the first iteration's model files,
+#' but does not execute SS3 or calculate residuals.
+#' Default is FALSE.
+#'
+#' @param plot_final
+#' Logical. If TRUE, generates composite afscOSA
+#' diagnostic PDFs for the final fitted iteration.
+#' Default is FALSE.
+#'
+#' @param show_final_plots
+#' Logical. If TRUE, additionally displays the
+#' final composite diagnostic plots when running
+#' in an interactive R session.
+#' This does not independently enable plot generation;
+#' plot_final must also be TRUE.
+#' Default is FALSE.
+#'
+#' @return
+#' Invisibly returns a list containing:
+#'
+#' \describe{
+#'   \item{output_dir}{
+#'     Character. Path to the output directory.
+#'   }
+#'   \item{history}{
+#'     Data frame containing iteration number, target,
+#'     weighting factor, fleet, fitted weight, pooled
+#'     SDNR, mean residual, residual count, proposed
+#'     next weight, and convergence indicator.
+#'     NULL if no iteration was fitted.
+#'   }
+#'   \item{converged}{
+#'     Logical. TRUE if every eligible weighting factor
+#'     satisfied the SDNR tolerance criterion.
+#'   }
+#'   \item{targets}{
+#'     Data frame of identified composition targets
+#'     and their weights in the function's final state.
+#'     These weights should not be assumed to equal
+#'     the final proposed weights.
+#'   }
+#'   \item{final_plot_files}{
+#'     Character vector containing paths to successfully
+#'     created final diagnostic PDFs. Empty when no
+#'     PDFs were generated.
+#'   }
+#' }
+#'
+#' @references
+#' Francis, R. I. C. C. (2011).
+#' Data weighting in statistical fisheries stock assessment
+#' models. Canadian Journal of Fisheries and Aquatic Sciences,
+#' 68, 1124-1138.
+#'
+#' Trijoulet et al. (2023).
+#' Model validation for compositional data in stock assessment
+#' models: Calculating residuals with correct properties.
+#' Fisheries Research.
+#'
+#' afscOSA package:
+#' https://github.com/NOAA-FIMS/afscOSA
+#'
+#' r4ss package:
+#' https://github.com/r4ss/r4ss
+#'
+#' @seealso
+#' [afscOSA::run_osa()],
+#' [afscOSA::plot_osa()],
+#' [r4ss::SS_output()]
+#'
+#' @examples
+#' \dontrun{
+#'
+#' # Load the package
+#' library(osaSS3)
+#'
+#' # Basic application
+#' results <- osa_reweight_ss3(
+#'   model_dir = "C:/SS3/MyModel"
+#' )
+#'
+#' # Examine convergence history
+#' print(results$history)
+#'
+#' # Examine convergence status
+#' print(results$converged)
+#'
+#' # Run with final OSA diagnostic plots
+#' results <- osa_reweight_ss3(
+#'   model_dir = "C:/SS3/MyModel",
+#'   output_dir = "C:/SS3/MyModel/OSA_run_2",
+#'   max_iter = 10,
+#'   tolerance = 0.05,
+#'   damping = 0.5,
+#'   plot_final = TRUE,
+#'   show_final_plots = TRUE
+#' )
+#'
+#' # Paths to final composite PDFs
+#' results$final_plot_files
+#'
+#' # Prepare a model without executing SS3
+#' test <- osa_reweight_ss3(
+#'   model_dir = "C:/SS3/MyModel",
+#'   output_dir = "C:/SS3/MyModel/OSA_dry_run",
+#'   dry_run = TRUE
+#' )
+#'
+#' }
+#'
+#' @export
+
 
 .osa_strip <- function(x) trimws(sub('#.*$', '', x))
 .osa_starter <- function(path) {
