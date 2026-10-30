@@ -1,0 +1,14 @@
+Package: osaSS3
+Type: Package
+Title: Experimental OSA Residual Reweighting for Stock Synthesis 3
+Version: 0.1.0
+Authors@R: person("OSA", "Working Group", role = c("aut", "cre"), email = "maintainer@example.org")
+Description: Iteratively updates Stock Synthesis 3 multinomial length and age
+    composition variance adjustment factors using one-step-ahead residual
+    standard deviations. Provides stratum-specific composite diagnostic PDFs.
+    This is an experimental research heuristic, not a validated estimator.
+License: MIT
+Encoding: UTF-8
+Imports: r4ss, afscOSA, ggplot2, grid, grDevices, utils
+Suggests: testthat
+RoxygenNote: 7.3.2
